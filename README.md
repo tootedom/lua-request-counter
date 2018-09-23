@@ -9,9 +9,13 @@
 - [Quick Example](#quick-example)
 - [API Specification](#api-specification)
     - [Set up a shared dict](#set-up-a-shared-dict)
+        - [Shared dict size](#shared-dict-size)
     - [Recording a request as part of "all" key](#recording-a-request-as-part-of-all-key)
     - [Recording a request under a specific key and "all" key](#recording-a-request-under-a-specific-key-and-all-key)
     - [Recording a request under a specific key](#recording-a-request-under-a-specific-key)
+    - [Stats Endpoint](#stats-endpoint)
+        - [Single Key stats](#single-key-stats)
+        - [All Request Stats Recorded for all keys](#all-request-stats-recorded-for-all-keys)
 - [Local Testing](#local-testing)
 - [See Also](#see-also)
 
@@ -199,7 +203,7 @@ server {
         }
     }
 
-    location /stats {
+    location /all_only_stats {
         set $request_key "stats";
 
         content_by_lua_block {
@@ -209,7 +213,7 @@ server {
         }
     }
 
-    location /allstats {
+    location /stats {
         content_by_lua_block {
             local request_counter = require "resty.greencheek.request.counter"
 
@@ -236,6 +240,17 @@ If all you are going to record is the number of request for all requests, then a
 
 ```
     lua_shared_dict request_counters 16k;
+```
+
+### Shared dict size
+
+A shared dict of size 16k, can hold 5 different request keys.
+
+The `stats` end point output the size of the shared dict that is remaining.  An error like the following may be encountered when the shared dict max size has been hit:
+
+```
+2018/09/23 16:15:27 [error] 149#149: *35 [lua] counter.lua:89: |{"level" : "ERROR", "msg" : "failed_set_key_expiry", "key": "topic_1537719300", "retry" : "false" }|not found, context: ngx.timer, client: 127.0.0.1, server: 0.0.0.0:9090
+2018/09/23 16:15:27 [error] 149#149: *35 [lua] counter.lua:97: |{"level" : "ERROR", "msg" : "failed_set_key_expiry", "key": "topic_1537719300" }|not found, context: ngx.timer, client: 127.0.0.1, server: 0.0.0.0:9090
 ```
 
 ----
@@ -296,6 +311,127 @@ log_by_lua_block {
 }
 ```
 
+## Stats Endpoint
+
+There are 2 stats endpoint.  1 that outputs all the keys under which requests are being recorded,
+and one that outputs only the stats for a specific key.
+
+### Single Key stats
+
+syntax: request_counter.single_stats(dict_name,stats_key)
+
+example: request_counter.single_stats("request_counters","all")
+
+The stats endpoint will usually be exposed by a specific location block:
+
+```
+    location /all_only_stats {
+        set $request_key "stats";
+
+        content_by_lua_block {
+            local request_counter = require "resty.greencheek.request.counter"
+
+            ngx.say(request_counter.single_stats("request_counters","all"))
+        }
+    }
+```
+
+This for example will output something similar to the following:
+
+```
+{
+  "shared_dict_info": {
+    "free_space": 4096,
+    "capacity": 16384
+  },
+  "stats": {
+    "current": {
+      "latency_ms": 173.86666666667,
+      "startofminute_epoch": 1537724100,
+      "requests": 15,
+      "rate": 27.094266573588
+    },
+    "prev1": {
+      "latency_ms": 1.2950819672131,
+      "startofminute_epoch": 1537724040,
+      "requests": 61
+    },
+    "prev2": {
+      "latency_ms": 0,
+      "startofminute_epoch": 1537723980,
+      "requests": 0
+    }
+  }
+}
+```
+
+### All Request Stats Recorded for all keys
+
+
+syntax: request_counter.stats(dict_name)
+
+example: request_counter.stats("request_counters")
+
+The stats endpoint will usually be exposed by a specific location block:
+
+```
+    location /stats {
+        content_by_lua_block {
+            local request_counter = require "resty.greencheek.request.counter"
+
+            ngx.say(request_counter.stats("request_counters"))
+        }
+    }
+```
+
+This for example will output something similar to the following:
+
+```
+{
+  "shared_dict_info": {
+    "free_space": 4096,
+    "capacity": 16384
+  },
+  "stats": {
+    "topic": {
+      "current": {
+        "latency_ms": 200.61538461538,
+        "startofminute_epoch": 1537724100,
+        "requests": 13,
+        "rate": 13
+      },
+      "prev1": {
+        "latency_ms": 0,
+        "startofminute_epoch": 1537724040,
+        "requests": 0
+      },
+      "prev2": {
+        "latency_ms": 0,
+        "startofminute_epoch": 1537723980,
+        "requests": 0
+      }
+    },
+    "all": {
+      "current": {
+        "latency_ms": 186.28571428571,
+        "startofminute_epoch": 1537724100,
+        "requests": 14,
+        "rate": 32.610083401203
+      },
+      "prev1": {
+        "latency_ms": 1.2950819672131,
+        "startofminute_epoch": 1537724040,
+        "requests": 61
+      },
+      "prev2": {
+        "latency_ms": 0,
+        "startofminute_epoch": 1537723980,
+        "requests": 0
+      }
+    }
+  }
+}
+```
 
 ----
 

@@ -27,7 +27,7 @@ local ngx_err = ngx.ERR
 
 local requests_shared_dict_default = 'request_counters'
 local scale = 60
-local expire_after_seconds = scale * 5
+local expire_after_seconds = scale * 4
 
 local FAILED_TO_SET_KEY_EXPIRY = "failed_set_key_expiry"
 
