@@ -30,7 +30,7 @@ Request Per Minute Counter
 
 # Status
 
-In Development
+Beta
 
 ----
 
