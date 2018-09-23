@@ -5,11 +5,13 @@
 - [Synopsis](#synopsis)
 - [Pre Requistes](#pre-requistes)
 - [Description](#description)
+    - [Rate in Current Time Period](#rate-in-current-time-period)
 - [Quick Example](#quick-example)
-    - [Init and Access block](#init-and-access-block)
-    - [Access Block](#access-block)
-    - [API Specification](#api-specification)
-        - [Require the library](#require-the-library)
+- [API Specification](#api-specification)
+    - [Set up a shared dict](#set-up-a-shared-dict)
+    - [Recording a request as part of "all" key](#recording-a-request-as-part-of-all-key)
+    - [Recording a request under a specific key and "all" key](#recording-a-request-under-a-specific-key-and-all-key)
+    - [Recording a request under a specific key](#recording-a-request-under-a-specific-key)
 - [Local Testing](#local-testing)
 - [See Also](#see-also)
 
@@ -51,139 +53,249 @@ It records the last 3 minutes worth of number of requests, and the average milli
 
 This module is intend for use in the `log_by_lua_block` of nginx.
 
-It will record the number of requests that are occurring per minute for the nginx.
+It will record the number of requests that are occurring per minute.
 
-It will store in a [shared dict](https://github.com/openresty/lua-nginx-module#lua_shared_dict), 3 items: 
+It will store in a [shared dict](https://github.com/openresty/lua-nginx-module#lua_shared_dict), 3 items:
 
-- average latency in millis
-- number of requests
-- the minute period
+- Accumulated latency in millis
+- Number of requests in the minute period of 00s to 59s
+- The minute period
+
+The number of requests is stored as the number of requests that occurred during a minute period 00-59s.  The latency is the accumulated sum of request time for
+all the requests during that minute period.
+
+The module provides a stats endpoint that will report the number of requests, and average latency for 3 time periods:
+
+- The current period that is active: "current"
+- The previous minute period: "prev1"
+- The minute period previous to the previous one: "prev2"
+
+## Rate in Current Time Period
+
+For the current time period it will report the "rate" of requests for a "minute" period based on a leaky bucket algorithm.
 
 ```
-      "latency_ms": 0,
-      "startofminute_epoch": 1537628160,
-      "requests": 0
+{
+  "shared_dict_info": {
+    "free_space": 4096,
+    "capacity": 16384
+  },
+  "stats": {
+    "all": {
+      "current": {
+        "latency_ms": 1.290454016298,
+        "startofminute_epoch": 1537709460,
+        "requests": 1718,
+        "rate": 11532.400005341
+      },
+      "prev1": {
+        "latency_ms": 1.3051666666666,
+        "startofminute_epoch": 1537709400,
+        "requests": 12000
+      },
+      "prev2": {
+        "latency_ms": 1.3002296211251,
+        "startofminute_epoch": 1537709340,
+        "requests": 3484
+      }
+    }
+  }
+}
 ```
+
+The rate is based on the cloudflare rate calculation as described on this blog (I have no knowledge of the actual implementation details of the cloudflare rate limiter.
+The implementation of the rate calculation in this library is soley based on the details described on the following blog):
+
+- https://blog.cloudflare.com/counting-things-a-lot-of-different-things/
+
+The rate approximation calculation as specified on the above blog, is as follows (where the window_period is 60s, i.e. one minute) :
+
+```
+rate = number_of_requests_in_previous_window * ((window_period - elasped_time_in_current_period) / window_period) + number_of_requests_in_current_window
+```
+
 
 # Quick Example
 
-There's a couple of ways to set up the rate limiting:
+Set up the shared_dict within the `http` section of nginx:
 
-- A combination of `init_by_lua_block` and `access_by_lua_block`
-- Entirely the `access_by_lua_block`
-
-Which is entirely up to you.  For either, you need to set up the `lua_shared_dict` in the `http` regardless.
-
-
-## Init and Access block
-
-Inside the http block, set up the `init_by_lua_block` and the shared dict
 ```
 http {
     ...
-    lua_shared_dict ratelimit_circuit_breaker 10m;
-
-    init_by_lua_block {
-        local ratelimit = require "resty.greencheek.redis.ratelimiter.limiter"
-        local red = { host = "127.0.0.1", port = 6379, timeout = 100}
-        login, err = ratelimit.new("login", "100r/s", red)
-
-        if not login then
-            error("failed to instantiate a resty.greencheek.redis.ratelimiter.limiter object")
-        end
-    }
-
-    include /etc/nginx/conf.d/*.conf;
+    lua_shared_dict request_counters 64k;
+    ...
 }
 ```
 
-Inside a `server` in one of the `/etc/nginx/conf.d/*.conf` includes, use the rate limit in a location or location blocks:
+Set up a `log_by_lua_block` within a server block.
+
+The below checks the setting of the nginx variable $request_key.
+When the `request_key` is variable is set, the method `record_request` is called with the given key.
+This records the number of requests that have occurred for that key, but also records that request against the `all` key.
+
+When the `request_key` is set to `stats` the request is not logged.  This is so that the "stats" requests do not add to the
+request counting and skew the `all` metric (this is enitrely up to you - this is just an example)
+
+When the `request_key` variable is not set.
+
+```
+    log_by_lua_block {
+        local request_counter = require "resty.greencheek.request.counter"
+        local shdict = require "resty.core.shdict"
+
+        local key = ngx.var.request_key
+        if key ~= "stats" then
+            if key == "" then
+                request_counter.record_generic_request("request_counters",ngx.var.request_time)
+            else
+                request_counter.record_request("request_counters",key,ngx.var.request_time)
+            end
+        end
+    }
+```
+
+Set up location blocks to the log requests into various `keys`
 
 ```
 server {
-    ....
 
-    location /login {
+    listen 9090;
 
-        access_by_lua_block {
-            if login:is_rate_limited(ngx.var.remote_addr) then
-                return ngx.exit(429)
+    log_by_lua_block {
+        local request_counter = require "resty.greencheek.request.counter"
+
+        local key = ngx.var.request_key
+        if key ~= "stats" then
+            if key == "" then
+                request_counter.record_generic_request("request_counters",ngx.var.request_time)
+            else
+                request_counter.record_request("request_counters",key,ngx.var.request_time)
             end
-        }
-
-        #
-        # return 200 "ok"; will not work, return in nginx does not run any of the access phases.  It just returns
-        #
-        content_by_lua_block {
-             ngx.say('Hello,world!')
-        }
+        end
     }
-}
-```
 
-## Access Block
-
-
-Inside the http block, set up thethe shared dict
-```
-http {
-    ...
-    lua_shared_dict ratelimit_circuit_breaker 10m;
-
-    ...
-
-    include /etc/nginx/conf.d/*.conf;
-
-}
-```
-
-
-Inside a `server` in one of the `/etc/nginx/conf.d/*.conf` includes:
-```
-    location /login {
-        access_by_lua_block {
-
-            local ratelimit = require "resty.greencheek.redis.ratelimiter.limiter"
-            local red = { host = "127.0.0.1", port = 6379, timeout = 100}
-            local lim, err = ratelimit.new("login", "100r/s", red)
-
-            if not lim then
-                ngx.log(ngx.ERR,
-                        "failed to instantiate a resty.greencheek.redis.ratelimiter.limiter object: ", err)
-                return ngx.exit(500)
-            end
-
-            local is_rate_limited = lim:is_rate_limited(ngx.var.remote_addr)
-
-            if is_rate_limited then
-                return ngx.exit(429)
-            end
-
-        }
+    location /log {
 
         content_by_lua_block {
-             ngx.say('Hello,world!')
+            ngx.sleep(0.001)
+            ngx.say('Hello,world!')
         }
     }
+
+    location /key {
+
+        set $request_key "key";
+        content_by_lua_block {
+            ngx.sleep(0.2)
+            ngx.say('Hello,world!')
+        }
+    }
+
+    location /topic {
+        set $request_key "topic";
+        content_by_lua_block {
+            ngx.sleep(0.2)
+            ngx.say('Hello,world!')
+        }
+    }
+
+    location /stats {
+        set $request_key "stats";
+
+        content_by_lua_block {
+            local request_counter = require "resty.greencheek.request.counter"
+
+            ngx.say(request_counter.single_stats("request_counters","all"))
+        }
+    }
+
+    location /allstats {
+        content_by_lua_block {
+            local request_counter = require "resty.greencheek.request.counter"
+
+            ngx.say(request_counter.stats("request_counters"))
+        }
+    }
+
+}
 ```
 
 ----
 
-## API Specification
+# API Specification
 
-To use the rate `limiter` there's 3 steps:
+To use the request counter `limiter` there's 2 steps to record the requests, 1 to show the stats:
 
-- Import the module (`require`)
-- Create a rate limiting object, by a zone
-- Use the object to ratelimit based on a request parameter (remote addess, server name, etc)
+- Create a shared dict: `lua_shared_dict request_counters 16k;`
+- Set up `log_by_lua_block`
+- Set up a location block to report the requests stats: `request_counter.stats()`
 
-### Require the library
+## Set up a shared dict
 
-To use any ratelimiter, you need the [resty redis library](https://github.com/openresty/lua-resty-redis).
+If all you are going to record is the number of request for all requests, then a shared dict of 16k is fine.
 
 ```
-local ratelimit = require "resty.greencheek.redis.ratelimiter.limiter"
+    lua_shared_dict request_counters 16k;
 ```
+
+----
+
+## Recording a request as part of "all" key
+
+This records the request against the `all` key
+
+syntax: request_counter.record_generic_request(dict_name,request_latency)
+
+example: request_counter.record_generic_request("request_counters",ngx.var.request_time)
+
+This is intended for use in a `log_by_lua_block`
+
+```
+log_by_lua_block {
+    local request_counter = require "resty.greencheek.request.counter"
+    request_counter.record_generic_request("request_counters",ngx.var.request_time)
+}
+```
+
+----
+
+## Recording a request under a specific key and "all" key
+
+
+This records the request against only a specific key
+
+syntax: request_counter.record_request(dict_name,key,request_latency)
+
+example: request_counter.record_request("request_counters","login",ngx.var.request_time)
+
+This is intended for use in a `log_by_lua_block`
+
+```
+log_by_lua_block {
+    local request_counter = require "resty.greencheek.request.counter"
+    request_counter.record_request("request_counters","login",ngx.var.request_time)
+}
+```
+
+----
+
+## Recording a request under a specific key
+
+This records the request against only a specific key
+
+syntax: request_counter.record_specific_request(dict_name,request_latency)
+
+example: request_counter.record_specific_request("request_counters","login",ngx.var.request_time)
+
+This is intended for use in a `log_by_lua_block`
+
+```
+log_by_lua_block {
+    local request_counter = require "resty.greencheek.request.counter"
+    request_counter.record_specific_request("request_counters","login",ngx.var.request_time)
+}
+```
+
 
 ----
 
@@ -199,34 +311,26 @@ And then run from the root of the repo:
 
 
 ```
-docker run --name ratelimiter --rm -it \
--v $(pwd)/conf.d:/etc/nginx/conf.d \
--v $(pwd)/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf \
--v $(pwd):/data \
--v $(pwd)/lib/resty/greencheek/redis/ratelimiter/limiter.lua:/usr/local/openresty/lualib/resty/greencheek/redis/ratelimiter/limiter.lua \
-ratelimiter:latest /bin/bash
+(docker rm -f counter 2>&1 >/dev/null || :) && docker run --name counter --rm -it -v $(pwd)/conf.d:/etc/nginx/conf.d -v $(pwd)/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf -v $(pwd):/data -v $(pwd)/lib/resty/greencheek/request/counter.lua:/usr/local/openresty/lualib/resty/greencheek/request/counter.lua counter:latest /bin/bash
 ```
 
-when in the contain run the `/data/init.sh` to start openresty and a local redis.  OpenResty will be running on port `9090`.
+when in the container run:
+
+- `/usr/local/openresty/bin/openresty` to start openresty
+- `/usr/local/openresty/bin/openresty -s stop` to stop openresty.
+
+OpenResty will be running on port `9090`.
+
 Gil Tene's fork of [wrk](https://github.com/giltene/wrk2) is also complied during the build of the docker image.
 
 ```
-/data/init.sh
-curl localhost:9090/login
-wrk -t1 -c1 -d30s -R2 http://localhost:9090/login
+wrk -t1 -c1 -d30s -R2 http://localhost:9090/log
 ```
-
-There is a `nginx.config` and a `conf.d/default.config` example in the project for you to work with.  By default there are 3 locations:
-
-/t
-/login
-/login_foreground
 
 ----
 
 # See Also
 
-* Rate Limiting with NGINX: https://www.nginx.com/blog/rate-limiting-nginx/
 * the ngx_lua module: https://github.com/openresty/lua-nginx-module
 * OpenResty: https://openresty.org/
 

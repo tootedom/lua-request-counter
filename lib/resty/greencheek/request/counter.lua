@@ -163,6 +163,12 @@ local function generate_stats_dict(period,requests,latency)
     return stats
 end
 
+local function get_current_rate(start_of_period,prev_requests,current_requests)
+    local elapsed = ngx.req.start_time() - start_of_period
+    local current_rate = prev_requests * ( (scale - elapsed) / scale) + current_requests
+    return current_rate
+end
+
 function _M.single_stats(dict_name,key)
     local dict = ngx_shared_dict[dict_name]
     local start_of_period = get_start_of_period(ngx.req.start_time())
@@ -173,15 +179,24 @@ function _M.single_stats(dict_name,key)
     local prev_requests, prev_latency = get_stats(dict,string.format("%s_%d",key,previous_period))
     local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s_%d",key,previous_but_one_period))
 
+    local current_rate = get_current_rate(start_of_period,prev_requests,current_requests)
+    local current_dict = generate_stats_dict(start_of_period,current_requests,current_latency)
+    current_dict["rate"] = current_rate
+
     local json = cjson.encode({
-        current = generate_stats_dict(start_of_period,current_requests,current_latency),
-        prev1 = generate_stats_dict(previous_period,prev_requests,prev_latency),
-        prev2 = generate_stats_dict(previous_but_one_period,prev_but_one_requests,prev_but_one_latency)
+        stats = {
+            current = current_dict,
+            prev1 = generate_stats_dict(previous_period,prev_requests,prev_latency),
+            prev2 = generate_stats_dict(previous_but_one_period,prev_but_one_requests,prev_but_one_latency)
+        },
+        shared_dict_info = {
+            free_space = dict:free_space(),
+            capacity = dict:capacity()
+        }
     })
 
     return json
 end
-
 
 
 function _M.stats(dict_name)
@@ -200,14 +215,25 @@ function _M.stats(dict_name)
         local current_requests, current_latency = get_stats(dict,string.format("%s_%d",key,start_of_period))
         local prev_requests, prev_latency = get_stats(dict,string.format("%s_%d",key,previous_period))
         local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s_%d",key,previous_but_one_period))
+
+        local current_rate = get_current_rate(start_of_period,prev_requests,current_requests)
+        local current_dict = generate_stats_dict(start_of_period,current_requests,current_latency)
+        current_dict["rate"] = current_rate
         json[key] = {
-            current = generate_stats_dict(start_of_period,current_requests,current_latency),
+            current = current_dict,
             prev1 = generate_stats_dict(previous_period,prev_requests,prev_latency),
             prev2 = generate_stats_dict(previous_but_one_period,prev_but_one_requests,prev_but_one_latency)
         }
     end
 
-    return cjson.encode(json)
+
+    return cjson.encode({
+        stats = json,
+        shared_dict_info = {
+            free_space = dict:free_space(),
+            capacity = dict:capacity()
+        }
+    })
 end
 
 return _M
