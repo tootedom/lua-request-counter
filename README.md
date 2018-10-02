@@ -90,7 +90,8 @@ For the current time period it will report the "rate" of requests for a "minute"
         "latency_ms": 1.290454016298,
         "startofminute_epoch": 1537709460,
         "requests": 1718,
-        "rate": 11532.400005341
+        "rate": 11532.400005341,
+        "epoch": 1537709468
       },
       "prev1": {
         "latency_ms": 1.3051666666666,
@@ -398,7 +399,8 @@ This for example will output something similar to the following:
         "latency_ms": 200.61538461538,
         "startofminute_epoch": 1537724100,
         "requests": 13,
-        "rate": 13
+        "rate": 13,
+        "epoch": 1537724123
       },
       "prev1": {
         "latency_ms": 0,
@@ -440,7 +442,7 @@ This for example will output something similar to the following:
 There's a `Dockerfile` that can be used to build a local docker image for testing.  Build the image:
 
 ```
-docker build --no-cache .
+docker build --no-cache -t counter . 
 ```
 
 And then run from the root of the repo:

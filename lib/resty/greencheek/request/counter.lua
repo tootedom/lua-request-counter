@@ -163,15 +163,16 @@ local function generate_stats_dict(period,requests,latency)
     return stats
 end
 
-local function get_current_rate(start_of_period,prev_requests,current_requests)
-    local elapsed = ngx.req.start_time() - start_of_period
+local function get_current_rate(start_time, start_of_period,prev_requests,current_requests)
+    local elapsed = start_time - start_of_period
     local current_rate = prev_requests * ( (scale - elapsed) / scale) + current_requests
     return current_rate
 end
 
 function _M.single_stats(dict_name,key)
     local dict = ngx_shared_dict[dict_name]
-    local start_of_period = get_start_of_period(ngx.req.start_time())
+    local start_time = ngx.req.start_time()
+    local start_of_period = get_start_of_period(start_time)
     local previous_period = start_of_period-scale
     local previous_but_one_period = previous_period-scale
 
@@ -179,9 +180,10 @@ function _M.single_stats(dict_name,key)
     local prev_requests, prev_latency = get_stats(dict,string.format("%s_%d",key,previous_period))
     local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s_%d",key,previous_but_one_period))
 
-    local current_rate = get_current_rate(start_of_period,prev_requests,current_requests)
+    local current_rate = get_current_rate(start_time, start_of_period,prev_requests,current_requests)
     local current_dict = generate_stats_dict(start_of_period,current_requests,current_latency)
     current_dict["rate"] = current_rate
+    current_dict["epoch"] = math.floor(start_time)
 
     local json = cjson.encode({
         stats = {
@@ -206,7 +208,8 @@ function _M.stats(dict_name)
         keys[get_key(key)] = true
     end
 
-    local start_of_period = get_start_of_period(ngx.req.start_time())
+    local start_time = ngx.req.start_time()
+    local start_of_period = get_start_of_period(start_time)
     local previous_period = start_of_period-scale
     local previous_but_one_period = previous_period-scale
 
@@ -216,9 +219,10 @@ function _M.stats(dict_name)
         local prev_requests, prev_latency = get_stats(dict,string.format("%s_%d",key,previous_period))
         local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s_%d",key,previous_but_one_period))
 
-        local current_rate = get_current_rate(start_of_period,prev_requests,current_requests)
+        local current_rate = get_current_rate(start_time, start_of_period,prev_requests,current_requests)
         local current_dict = generate_stats_dict(start_of_period,current_requests,current_latency)
         current_dict["rate"] = current_rate
+        current_dict["epoch"] = math.floor(start_time)
         json[key] = {
             current = current_dict,
             prev1 = generate_stats_dict(previous_period,prev_requests,prev_latency),
