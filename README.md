@@ -277,8 +277,7 @@ log_by_lua_block {
 
 ## Recording a request under a specific key and "all" key
 
-
-This records the request against only a specific key
+This records the request against only a specific key.  *note* The key should not contain the `pipe` character `|`
 
 syntax: request_counter.record_request(dict_name,key,request_latency)
 
@@ -297,7 +296,7 @@ log_by_lua_block {
 
 ## Recording a request under a specific key
 
-This records the request against only a specific key
+This records the request against only a specific key.  *note* The key should not contain the `pipe` character `|`
 
 syntax: request_counter.record_specific_request(dict_name,request_latency)
 

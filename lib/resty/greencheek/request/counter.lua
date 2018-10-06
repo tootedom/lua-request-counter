@@ -45,7 +45,7 @@ local function is_str(s)
 end
 
 local function get_key(s)
-    for i in string.gmatch(s, '([^_]+)') do
+    for i in string.gmatch(s, '([^|]+)') do
         return i
     end
 end
@@ -56,7 +56,7 @@ end
 -- key is <zone:key>_<epoch for period>
 --
 local function get_keys(key,start_of_period)
-    return string.format("%s_%d",key,start_of_period),string.format("%s_%d_latency",key,start_of_period)
+    return string.format("%s|%d",key,start_of_period),string.format("%s|%d|latency",key,start_of_period)
 end
 
 local function get_start_of_period(requesttime)
@@ -133,8 +133,9 @@ end
 
 
 function _M.record_request(dict_name, key, latency_ms)
-    increment(dict_name,key,latency_ms,ngx.req.start_time())
-    increment(dict_name,"all",latency_ms,ngx.req.start_time())
+    local start_time = ngx.req.start_time()
+    increment(dict_name,key,latency_ms,start_time)
+    increment(dict_name,"all",latency_ms,start_time)
 end
 
 local function starts_with(str, start)
@@ -148,7 +149,7 @@ local function get_stats(dict,key)
         requests = 0
         latency = 0
     else
-        latency = ((dict:get(string.format("%s_latency",key)))*1000)/requests
+        latency = ((dict:get(string.format("%s|latency",key)))*1000)/requests
     end
 
     return requests,latency
@@ -176,9 +177,9 @@ function _M.single_stats(dict_name,key)
     local previous_period = start_of_period-scale
     local previous_but_one_period = previous_period-scale
 
-    local current_requests, current_latency = get_stats(dict,string.format("%s_%d",key,start_of_period))
-    local prev_requests, prev_latency = get_stats(dict,string.format("%s_%d",key,previous_period))
-    local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s_%d",key,previous_but_one_period))
+    local current_requests, current_latency = get_stats(dict,string.format("%s|%d",key,start_of_period))
+    local prev_requests, prev_latency = get_stats(dict,string.format("%s|%d",key,previous_period))
+    local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s|%d",key,previous_but_one_period))
 
     local current_rate = get_current_rate(start_time, start_of_period,prev_requests,current_requests)
     local current_dict = generate_stats_dict(start_of_period,current_requests,current_latency)
@@ -215,9 +216,9 @@ function _M.stats(dict_name)
 
     local json = {}
     for key,v in pairs(keys) do
-        local current_requests, current_latency = get_stats(dict,string.format("%s_%d",key,start_of_period))
-        local prev_requests, prev_latency = get_stats(dict,string.format("%s_%d",key,previous_period))
-        local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s_%d",key,previous_but_one_period))
+        local current_requests, current_latency = get_stats(dict,string.format("%s|%d",key,start_of_period))
+        local prev_requests, prev_latency = get_stats(dict,string.format("%s|%d",key,previous_period))
+        local prev_but_one_requests, prev_but_one_latency = get_stats(dict,string.format("%s|%d",key,previous_but_one_period))
 
         local current_rate = get_current_rate(start_time, start_of_period,prev_requests,current_requests)
         local current_dict = generate_stats_dict(start_of_period,current_requests,current_latency)
